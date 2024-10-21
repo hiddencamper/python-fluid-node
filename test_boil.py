@@ -3,41 +3,8 @@ import iapws._iapws97Constants
 import numpy as np
 import matplotlib.pyplot as plt
 import math
-
-class PID_Controller:
-    def __init__(self, setP, setI, setD, target, clampmin, clampmax,inv):
-        self.P = setP
-        self.I = setI
-        self.D = setD
-        self.setPoint = target
-        self.prev_Int = 0
-        self.prev_err = 0
-        self.min = clampmin
-        self.max = clampmax
-        self.inverse = inv
-
-    def run(self, value, dt):
-        if self.inverse == False:
-            error = self.setPoint - value
-        else:
-            error = value - self.setPoint
-        integral = self.prev_Int + error*dt
-        derivative = (error - self.prev_err)/dt
-        proportional = error
-        self.prev_err = error
-        self.prev_Int = integral
-        output = self.P * proportional + self.I * integral + self.D * derivative
-        
-        if output > 100 or output < 0:
-            self.prev_Int -= self.I*self.prev_Int
-
-        if output < self.min:
-            output = self.min
-        if output > self.max:
-            output = self.max
-
-        return output/100 #Percentage output
-
+import PID
+import boiler_func
 
 PSI_TO_PASCAL = 6895
 FEEDPUMP_MAX_FLOW = 100000 #kg/sec
@@ -45,25 +12,26 @@ BYPASS_VLV_FLOW = 60000 #kg/sec
 gasConstant = 8.3145
 molarMassOfSteam = 18.01528 / 1000 # kg/ mol
 
-
-Vessel_Area = math.pi * math.pow((251 * 2.54/100)/2,2)
+Vessel_Diameter = 218 * 2.54/100 # inches converted to cm converted to m
+Vessel_Radius = Vessel_Diameter/2
+Vessel_Area = math.pi * Vessel_Radius * Vessel_Radius
 Vessel_Volume = 100000 #m3
+Vessel_Height = Vessel_Volume / Vessel_Area
 Liquid_Volume = 1000 #m3
 Temp = 50 + 273.15 #C
 PressMPa = 14.7 * PSI_TO_PASCAL / 1e6 #MPa
 PressPa = PressMPa * 1e6
+Internal_Mass = 10000 #kg
 
-state = iapws.IAPWS97(T=Temp, P=PressMPa)
-Enthalpy = state.h
-Liquid_Mass = Liquid_Volume * state.rho #kg
+steps = 500
+stepsize= 1
 
-Steam_Mass = (PressPa*(Vessel_Volume-Liquid_Volume)*molarMassOfSteam) /(Temp * gasConstant)
+Boiler = boiler_func.Cylindrical_Boiler(Vessel_Radius, Vessel_Height, Liquid_Volume, Temp, PressMPa, Internal_Mass,stepsize)
 
-print("Initial Liquid Mass: ", Liquid_Mass)
-print("Initial Steam Mass: ", Steam_Mass)
+print("Initial Liquid Mass: ", Boiler.Liquid_Mass)
+print("Initial Steam Mass: ", Boiler.Steam_Mass)
 
-steps = 1000
-stepsize=1
+
 
 WtrMassArr = np.zeros(steps)
 StmMassArr = np.zeros(steps)
@@ -75,81 +43,59 @@ QualityArr = np.zeros(steps)
 FeedwaterFlowArr = np.zeros(steps)
 HeatArr = np.zeros(steps)
 SteamFlowArr = np.zeros(steps)
+DropletMassArr = np.zeros(steps)
+DropletFlowArr = np.zeros(steps)
+DropletVelocityArr = np.zeros(steps)
 
 heat_add = 0
-heat_limit = 100
-PressPSIG = 0
+heat_limit = 50
+Boiler.Set_Heating_Power(heat_add)
 
-FW_PID = PID_Controller(4, .5, .25,30,0,100,False)
+FW_PID = PID.PID_Controller(4, 1, .25,40,0,100,False)
 
-SB_PID = PID_Controller(1,.5,.2,1000,0,100, True)
+SB_PID = PID.PID_Controller(1,.5,.2,1000,0,100, True)
 
 for i in range (steps):
     try:
-        Enthalpy += heat_add
         print(i)
 
-        state = iapws.IAPWS97(P=PressMPa, h=Enthalpy)
+        if i == 31:
+            print("stop")
 
-#        if i == 471:
-#            print ("Stop")
+        Boiler.Set_Heating_Power(heat_add)
 
-        TempArr[i] = state.T-273.15
-        Temp = TempArr[i]
-        WtrMassArr[i] = Liquid_Mass * (1-state.x)
+        Boiler.run_Step()
 
-        StmMassArr[i] = Steam_Mass + Liquid_Mass*state.x
-        EnthalpyArr[i] = Enthalpy
-        QualityArr[i] = state.x
-        SteamFlowArr[i] = 0
-        SteamFlowArr[i] = BYPASS_VLV_FLOW * SB_PID.run(PressPSIG,1)
+        FeedWaterKg = FEEDPUMP_MAX_FLOW * FW_PID.run(Boiler.LiquidHeight,stepsize)
 
-        if i > 300 and i < 700:
-            SteamFlowArr[i] = StmMassArr[i] * .1
-            if SteamFlowArr[i] > BYPASS_VLV_FLOW:
-                SteamFlowArr[i] = BYPASS_VLV_FLOW
+        Boiler.injectFW(FeedWaterKg, 200)
 
-        if SteamFlowArr[i] > 0 and state.region == 4:
-            Enthalpy -= (SteamFlowArr[i] * state.Vapor.h) / (StmMassArr[i] + WtrMassArr[i])
+        SteamFlowKg = BYPASS_VLV_FLOW * SB_PID.run(Boiler.PressPSIG,stepsize)
 
-        StmMassArr[i] -= SteamFlowArr[i]
-        Liquid_Mass -= SteamFlowArr[i]
-        Liquid_Volume = WtrMassArr[i] * state.Liquid.v
-        WaterHeightArr[i] = Liquid_Volume / Vessel_Area
-        
-        Steam_Volume = Vessel_Volume - Liquid_Volume
- 
-        PressPa = (StmMassArr[i]/molarMassOfSteam) * gasConstant * state.T / Steam_Volume # Pa
-        PressMPa = PressPa/1e6
-        PressPSIG = PressPa/ PSI_TO_PASCAL
+        Boiler.RemoveSteamFlow(SteamFlowKg)
 
-        new_state = iapws.IAPWS97(P=PressMPa, h=Enthalpy)
+        TempArr[i] = Boiler.TempK
+        WtrMassArr[i] = Boiler.Liquid_Mass
+        DropletMassArr[i] = Boiler.DropletMass
+        StmMassArr[i] = Boiler.Steam_Mass
+        EnthalpyArr[i] = Boiler.Enthalpy
+        QualityArr[i] = Boiler.Quality
+        SteamFlowArr[i] = SteamFlowKg
+        WaterHeightArr[i] = Boiler.LiquidHeight
+        PressArr[i] = Boiler.PressPSIG
+        HeatArr[i] = Boiler.heatingPower
+        FeedwaterFlowArr[i] = FeedWaterKg
+        DropletFlowArr[i] = Boiler.LastDropletFlow
+        DropletVelocityArr[i] = Boiler.LastDropletVel
 
-
-        PressArr[i] = PressPSIG
-        if PressPSIG >= 1100:
+        if Boiler.PressPSIG >= 1100:
             heat_add -=5
             if heat_add < 0:
                 heat_add = 0
         else:
             heat_add += 5
             if heat_add > heat_limit:
-                heat_add = heat_limit
-
-        if i > 500 and i < 600:
-           heat_add = 0
-        HeatArr[i] = heat_add
-
-
-
-        FeedWaterKg = FEEDPUMP_MAX_FLOW * FW_PID.run(WaterHeightArr[i],1)
-
-        FeedwaterFlowArr[i] = FeedWaterKg
-        Liquid_Mass += FeedWaterKg
-        Enthalpy = (WtrMassArr[i] * EnthalpyArr[i] + FeedWaterKg*200) / (WtrMassArr[i] + FeedWaterKg)
-        EnthalpyArr[i] = Enthalpy
-        WtrMassArr[i] += FeedWaterKg
-        Liquid_Volume= WtrMassArr[i] * state.Liquid.v        
+                heat_add = heat_limit 
 
 
     except:
@@ -162,7 +108,7 @@ plt.figure(figsize=(16, 8))
 plt.subplot(5, 1, 1)
 plt.plot(time_array, SteamFlowArr)
 plt.xlabel("Time (s)")
-plt.ylabel("Steam Flow - SRV (kg/sec)")
+plt.ylabel("Steam Flow (kg/s)")
 plt.title("Steam Flow Over Time")
 
 plt.subplot(5, 1, 2)
@@ -172,10 +118,10 @@ plt.ylabel("Pressure (PSIG)")
 plt.title("Pressure Over Time")
 
 plt.subplot(5, 1, 3)
-plt.plot(time_array, EnthalpyArr)
+plt.plot(time_array, QualityArr)
 plt.xlabel("Time (s)")
-plt.ylabel("Sp Enthalpy (kj/kg)")
-plt.title("Sp Enthalpy Over Time")
+plt.ylabel("Quality")
+plt.title("Quality Over Time")
 
 plt.subplot(5, 1, 4)
 plt.plot(time_array, WaterHeightArr)
