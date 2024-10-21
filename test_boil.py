@@ -40,7 +40,7 @@ class PID_Controller:
 
 
 PSI_TO_PASCAL = 6895
-FEEDPUMP_MAX_FLOW = 60000 #kg/sec
+FEEDPUMP_MAX_FLOW = 100000 #kg/sec
 BYPASS_VLV_FLOW = 60000 #kg/sec
 gasConstant = 8.3145
 molarMassOfSteam = 18.01528 / 1000 # kg/ mol
@@ -80,7 +80,7 @@ heat_add = 0
 heat_limit = 100
 PressPSIG = 0
 
-FW_PID = PID_Controller(6, .5, .25,30,0,100,False)
+FW_PID = PID_Controller(4, .5, .25,30,0,100,False)
 
 SB_PID = PID_Controller(1,.5,.2,1000,0,100, True)
 
@@ -91,34 +91,40 @@ for i in range (steps):
 
         state = iapws.IAPWS97(P=PressMPa, h=Enthalpy)
 
+#        if i == 471:
+#            print ("Stop")
+
         TempArr[i] = state.T-273.15
         Temp = TempArr[i]
         WtrMassArr[i] = Liquid_Mass * (1-state.x)
+
         StmMassArr[i] = Steam_Mass + Liquid_Mass*state.x
         EnthalpyArr[i] = Enthalpy
         QualityArr[i] = state.x
         SteamFlowArr[i] = 0
         SteamFlowArr[i] = BYPASS_VLV_FLOW * SB_PID.run(PressPSIG,1)
 
+        if i > 300 and i < 700:
+            SteamFlowArr[i] = StmMassArr[i] * .1
+            if SteamFlowArr[i] > BYPASS_VLV_FLOW:
+                SteamFlowArr[i] = BYPASS_VLV_FLOW
+
+        if SteamFlowArr[i] > 0 and state.region == 4:
+            Enthalpy -= (SteamFlowArr[i] * state.Vapor.h) / (StmMassArr[i] + WtrMassArr[i])
+
         StmMassArr[i] -= SteamFlowArr[i]
         Liquid_Mass -= SteamFlowArr[i]
         Liquid_Volume = WtrMassArr[i] * state.Liquid.v
         WaterHeightArr[i] = Liquid_Volume / Vessel_Area
-
+        
         Steam_Volume = Vessel_Volume - Liquid_Volume
  
-        
-
-#        if(i > 400):
-#            SteamFlowArr[i] = 0.05*StmMassArr[i]
-#            StmMassArr[i] -= .05*StmMassArr[i]
-#            Liquid_Mass -= .05*StmMassArr[i]
-            
-
-
         PressPa = (StmMassArr[i]/molarMassOfSteam) * gasConstant * state.T / Steam_Volume # Pa
         PressMPa = PressPa/1e6
         PressPSIG = PressPa/ PSI_TO_PASCAL
+
+        new_state = iapws.IAPWS97(P=PressMPa, h=Enthalpy)
+
 
         PressArr[i] = PressPSIG
         if PressPSIG >= 1100:
@@ -130,8 +136,8 @@ for i in range (steps):
             if heat_add > heat_limit:
                 heat_add = heat_limit
 
-        if i > 400:
-            heat_add = 0
+        if i > 500 and i < 600:
+           heat_add = 0
         HeatArr[i] = heat_add
 
 
@@ -140,7 +146,7 @@ for i in range (steps):
 
         FeedwaterFlowArr[i] = FeedWaterKg
         Liquid_Mass += FeedWaterKg
-        Enthalpy = (WtrMassArr[i] * EnthalpyArr[i] + FeedWaterKg*450) / (WtrMassArr[i] + FeedWaterKg)
+        Enthalpy = (WtrMassArr[i] * EnthalpyArr[i] + FeedWaterKg*200) / (WtrMassArr[i] + FeedWaterKg)
         EnthalpyArr[i] = Enthalpy
         WtrMassArr[i] += FeedWaterKg
         Liquid_Volume= WtrMassArr[i] * state.Liquid.v        
@@ -166,10 +172,10 @@ plt.ylabel("Pressure (PSIG)")
 plt.title("Pressure Over Time")
 
 plt.subplot(5, 1, 3)
-plt.plot(time_array, HeatArr)
+plt.plot(time_array, EnthalpyArr)
 plt.xlabel("Time (s)")
-plt.ylabel("Specific Enthalpy Added kJ/kg")
-plt.title("Heat Added Over Time")
+plt.ylabel("Sp Enthalpy (kj/kg)")
+plt.title("Sp Enthalpy Over Time")
 
 plt.subplot(5, 1, 4)
 plt.plot(time_array, WaterHeightArr)
