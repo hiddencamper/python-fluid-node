@@ -61,6 +61,9 @@ class Cylindrical_Boiler:
         self.LastDropletFlow = 0
         self.LastDropletVel = 0
         self.deltaT = initdeltaT
+        self.LastSteamDemand = 0
+        self.LastSwellHeight = 0
+        self.LastLiquidVol = self.LiquidSpaceVol
 
     def Set_Heating_Power(self, newPower):
         self.heatingPower = newPower
@@ -85,7 +88,7 @@ class Cylindrical_Boiler:
 
         dropletFlow = dropVel * self.DropletMass / self.LiquidSpaceVol
         
-        #dropletFlow = self.DropletMass
+        dropletFlow = self.DropletMass #TODO:Comment this out
 
         if dropletFlow > self.DropletMass:
             dropletFlow = self.DropletMass
@@ -111,7 +114,22 @@ class Cylindrical_Boiler:
         if self.Steam_Mass < steamDemand:
             steamDemand = self.Steam_Mass
         self.Steam_Mass -= steamDemand
+        self.LastSteamDemand = steamDemand
         self.idealGas_PressurePa()
+
+    def shink_swell(self, state):
+        if state.region != 4:
+            return
+        VaporFlow = self.LastSteamDemand * state.Vapor.v
+        Sup_Flow = VaporFlow / self.Area
+        BRTop = 1.53*math.pow(state.sigma*self.gravity*(state.Liquid.rho-state.Vapor.rho),.25)
+        BRBot = math.pow(state.Liquid.rho,0.5)
+        BubbleRise = BRTop/BRBot
+        RadialDist = 1.2 - 0.2 * math.sqrt(state.Vapor.rho / state.Liquid.rho)
+        void_swell = Sup_Flow / (2*BubbleRise + RadialDist*Sup_Flow)
+        Swell_Height = self.LiquidHeight / (1-void_swell)
+        Swell_Height /= 100
+        self.LastSwellHeight = Swell_Height
 
     def run_Step(self):
 
@@ -138,12 +156,15 @@ class Cylindrical_Boiler:
 
         self.WaterVol = self.Liquid_Mass * state.Liquid.v
         if (state.region == 4 and self.DropletMass > 1):
-            #self.DropletVol = self.DropletMass * state.Vapor.v 
-            self.DropletVol = self.DropletMass * state.Liquid.v #TODO: This is all messed up
+            self.DropletVol = self.DropletMass * state.Vapor.v 
+            #self.DropletVol = self.DropletMass * state.Liquid.v #TODO: This is all messed up
+            #self.DropletVol = self.DropletMass * state.v #TODO: This is all messed up
         else:
             self.DropletVol = 0
         self.LiquidSpaceVol = self.WaterVol + self.DropletVol
         self.SteamVol = self.Volume - self.LiquidSpaceVol
         self.LiquidHeight = self.LiquidSpaceVol / self.Area
 
-        
+        self.shink_swell(state)
+        self.LastLiquidVol = self.LiquidSpaceVol
+        self.LiquidHeight += self.LastSwellHeight

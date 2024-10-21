@@ -8,7 +8,7 @@ import boiler_func
 
 PSI_TO_PASCAL = 6895
 FEEDPUMP_MAX_FLOW = 100000 #kg/sec
-BYPASS_VLV_FLOW = 60000 #kg/sec
+BYPASS_VLV_FLOW = 80000 #kg/sec
 gasConstant = 8.3145
 molarMassOfSteam = 18.01528 / 1000 # kg/ mol
 
@@ -46,6 +46,7 @@ SteamFlowArr = np.zeros(steps)
 DropletMassArr = np.zeros(steps)
 DropletFlowArr = np.zeros(steps)
 DropletVelocityArr = np.zeros(steps)
+SwellHeightArr = np.zeros(steps)
 
 heat_add = 0
 heat_limit = 50
@@ -88,6 +89,8 @@ for i in range (steps):
         DropletFlowArr[i] = Boiler.LastDropletFlow
         DropletVelocityArr[i] = Boiler.LastDropletVel
 
+        SwellHeightArr[i] = Boiler.LastSwellHeight
+
         if Boiler.PressPSIG >= 1100:
             heat_add -=5
             if heat_add < 0:
@@ -118,10 +121,10 @@ plt.ylabel("Pressure (PSIG)")
 plt.title("Pressure Over Time")
 
 plt.subplot(5, 1, 3)
-plt.plot(time_array, QualityArr)
+plt.plot(time_array, SwellHeightArr)
 plt.xlabel("Time (s)")
-plt.ylabel("Quality")
-plt.title("Quality Over Time")
+plt.ylabel("Swelled Lvl (m)")
+plt.title("Level Over Time")
 
 plt.subplot(5, 1, 4)
 plt.plot(time_array, WaterHeightArr)
